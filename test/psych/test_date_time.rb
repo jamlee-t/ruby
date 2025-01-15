@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 require_relative 'helper'
-require 'date'
 
 module Psych
   class TestDateTime < TestCase
@@ -42,6 +41,26 @@ module Psych
       cycled = Psych::unsafe_load(Psych.dump times)
       assert_match(/12:00:00\+09:00/, cycled.first.to_s)
       assert_match(/12:00:00-05:00/,  cycled.last.to_s)
+    end
+
+    def test_julian_date
+      d = Date.new(1582, 10, 4, Date::GREGORIAN)
+      assert_cycle d
+    end
+
+    def test_proleptic_gregorian_date
+      d = Date.new(1582, 10, 14, Date::GREGORIAN)
+      assert_cycle d
+    end
+
+    def test_julian_datetime
+      dt = DateTime.new(1582, 10, 4, 23, 58, 59, 0, Date::GREGORIAN)
+      assert_cycle dt
+    end
+
+    def test_proleptic_gregorian_datetime
+      dt = DateTime.new(1582, 10, 14, 23, 58, 59, 0, Date::GREGORIAN)
+      assert_cycle dt
     end
 
     def test_invalid_date

@@ -91,7 +91,7 @@ describe "Addrinfo#initialize" do
         @addrinfo.afamily.should == Socket::AF_INET6
       end
 
-      it "returns the 0 socket type" do
+      it "returns the specified socket type" do
         @addrinfo.socktype.should == Socket::SOCK_STREAM
       end
 
@@ -335,7 +335,7 @@ describe "Addrinfo#initialize" do
         @sockaddr = ['AF_INET6', 80, 'hostname', '127.0.0.1']
       end
 
-      it "raises SocketError when using any Socket constant except except AF_INET(6)/PF_INET(6)" do
+      it "raises SocketError when using any Socket constant except AF_INET(6)/PF_INET(6)" do
         Socket.constants.grep(/(^AF_|^PF_)(?!INET)/).each do |constant|
           value = Socket.const_get(constant)
           -> {

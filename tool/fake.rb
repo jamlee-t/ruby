@@ -9,6 +9,15 @@ class File
   end
 end
 
+[[libpathenv, "."], [preloadenv, libruby_so]].each do |env, path|
+  env or next
+  e = ENV[env] or next
+  e = e.split(File::PATH_SEPARATOR)
+  path = File.realpath(path, builddir) rescue next
+  e.delete(path) or next
+  ENV[env] = (e.join(File::PATH_SEPARATOR) unless e.empty?)
+end
+
 static = !!(defined?($static) && $static)
 $:.unshift(builddir)
 posthook = proc do
@@ -45,13 +54,17 @@ prehook = proc do |extmk|
   $extout_prefix = '$(extout)$(target_prefix)/'
   config = RbConfig::CONFIG
   mkconfig = RbConfig::MAKEFILE_CONFIG
+  $builtruby ||= File.join(builddir, config['RUBY_INSTALL_NAME'] + config['EXEEXT'])
   RbConfig.fire_update!("builddir", builddir)
   RbConfig.fire_update!("buildlibdir", builddir)
   RbConfig.fire_update!("libdir", builddir)
+  RbConfig.fire_update!("prefix", $topdir)
   RbConfig.fire_update!("top_srcdir", $top_srcdir ||= top_srcdir)
   RbConfig.fire_update!("extout", $extout)
   RbConfig.fire_update!("rubyhdrdir", "$(top_srcdir)/include")
   RbConfig.fire_update!("rubyarchhdrdir", "$(extout)/include/$(arch)")
+  RbConfig.fire_update!("rubyarchdir", "$(extout)/$(arch)")
+  RbConfig.fire_update!("rubylibdir", "$(extout)/common")
   RbConfig.fire_update!("libdirname", "buildlibdir")
   trace_var(:$ruby, posthook)
   untrace_var(:$extmk, prehook)

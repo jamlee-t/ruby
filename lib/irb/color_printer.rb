@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 require 'pp'
-require 'irb/color'
+require_relative 'color'
 
 module IRB
   class ColorPrinter < ::PP
@@ -22,7 +22,7 @@ module IRB
     end
 
     def pp(obj)
-      if obj.is_a?(String)
+      if String === obj
         # Avoid calling Ruby 2.4+ String#pretty_print that splits a string by "\n"
         text(obj.inspect)
       else
@@ -37,6 +37,9 @@ module IRB
       width ||= str.length
 
       case str
+      when ''
+      when ',', '=>', '[', ']', '{', '}', '..', '...', /\A@\w+\z/
+        super(str, width)
       when /\A#</, '=', '>'
         super(Color.colorize(str, [:GREEN]), width)
       else

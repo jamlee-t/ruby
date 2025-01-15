@@ -183,7 +183,10 @@
 #undef Long
 #undef ULong
 
+#include <assert.h>
 #include <limits.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #if (INT_MAX >> 30) && !(INT_MAX >> 31)
 #define Long int
@@ -195,7 +198,7 @@
 #error No 32bit integer
 #endif
 
-#if HAVE_LONG_LONG
+#if defined(HAVE_LONG_LONG) && (HAVE_LONG_LONG)
 #define Llong LONG_LONG
 #else
 #define NO_LONG_LONG
@@ -221,12 +224,12 @@
 #ifdef MALLOC
 extern void *MALLOC(size_t);
 #else
-#define MALLOC xmalloc
+#define MALLOC malloc
 #endif
 #ifdef FREE
 extern void FREE(void*);
 #else
-#define FREE xfree
+#define FREE free
 #endif
 #ifndef NO_SANITIZE
 #define NO_SANITIZE(x, y) y
@@ -502,7 +505,7 @@ extern double rnd_prod(double, double), rnd_quot(double, double);
 #endif
 
 #ifndef ATOMIC_PTR_CAS
-#define ATOMIC_PTR_CAS(var, old, new) ((var) = (new), (old))
+#define ATOMIC_PTR_CAS(var, old, new) ((var) = (new), (void *)(old))
 #endif
 #ifndef LIKELY
 #define LIKELY(x) (x)
@@ -1549,9 +1552,10 @@ break2:
 	    aadj = 1.0;
 	    nd0 = -4;
 
-	    if (!*++s || !(s1 = strchr(hexdigit, *s))) goto ret0;
+	    if (!*++s || (!(s1 = strchr(hexdigit, *s)) && *s != '.')) goto ret0;
 	    if (*s == '0') {
 		while (*++s == '0');
+		if (!*s) goto ret;
 		s1 = strchr(hexdigit, *s);
 	    }
 	    if (s1 != NULL) {
@@ -1562,9 +1566,7 @@ break2:
 		} while (*++s && (s1 = strchr(hexdigit, *s)));
 	    }
 
-	    if (*s == '.') {
-		dsign = 1;
-		if (!*++s || !(s1 = strchr(hexdigit, *s))) goto ret0;
+	    if ((*s == '.') && *++s && (s1 = strchr(hexdigit, *s))) {
 		if (nd0 < 0) {
 		    while (*s == '0') {
 			s++;
@@ -1574,13 +1576,10 @@ break2:
 		for (; *s && (s1 = strchr(hexdigit, *s)); ++s) {
 		    adj += aadj * ((s1 - hexdigit) & 15);
 		    if ((aadj /= 16) == 0.0) {
-			while (strchr(hexdigit, *++s));
+			while (*++s && strchr(hexdigit, *s));
 			break;
 		    }
 		}
-	    }
-	    else {
-		dsign = 0;
 	    }
 
 	    if (*s == 'P' || *s == 'p') {
@@ -1603,9 +1602,6 @@ break2:
 		    }
 		} while ('0' <= c && c <= '9');
 		nd0 += nd * dsign;
-	    }
-	    else {
-		if (dsign) goto ret0;
 	    }
 	    dval(rv) = ldexp(adj, nd0);
 	    goto ret;
@@ -1643,9 +1639,9 @@ break2:
     }
 #endif
     if (c == '.') {
-        if (!ISDIGIT(s[1]))
-            goto dig_done;
         c = *++s;
+        if (!ISDIGIT(c))
+            goto dig_done;
         if (!nd) {
             for (; c == '0'; c = *++s)
                 nz++;

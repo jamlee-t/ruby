@@ -12,9 +12,9 @@ module Psych
     ###
     # This class walks a YAML AST, converting each node to Ruby
     class ToRuby < Psych::Visitors::Visitor
-      def self.create(symbolize_names: false, freeze: false)
+      def self.create(symbolize_names: false, freeze: false, strict_integer: false)
         class_loader = ClassLoader.new
-        scanner      = ScalarScanner.new class_loader
+        scanner      = ScalarScanner.new class_loader, strict_integer: strict_integer
         new(scanner, class_loader, symbolize_names: symbolize_names, freeze: freeze)
       end
 
@@ -36,7 +36,7 @@ module Psych
 
         unless @domain_types.empty? || !target.tag
           key = target.tag.sub(/^[!\/]*/, '').sub(/(,\d+)\//, '\1:')
-          key = "tag:#{key}" unless key =~ /^(?:tag:|x-private)/
+          key = "tag:#{key}" unless key.match?(/^(?:tag:|x-private)/)
 
           if @domain_types.key? key
             value, block = @domain_types[key]
@@ -79,8 +79,9 @@ module Psych
           class_loader.big_decimal._load o.value
         when "!ruby/object:DateTime"
           class_loader.date_time
-          require 'date' unless defined? DateTime
-          @ss.parse_time(o.value).to_datetime
+          t = @ss.parse_time(o.value)
+          DateTime.civil(*t.to_a[0, 6].reverse, Rational(t.utc_offset, 86400)) +
+            (t.subsec/86400)
         when '!ruby/encoding'
           ::Encoding.find o.value
         when "!ruby/object:Complex"
@@ -99,7 +100,7 @@ module Psych
           source  = $1
           options = 0
           lang    = nil
-          ($2 || '').split('').each do |option|
+          $2&.each_char do |option|
             case option
             when 'x' then options |= Regexp::EXTENDED
             when 'i' then options |= Regexp::IGNORECASE
@@ -323,7 +324,7 @@ module Psych
       end
 
       def visit_Psych_Nodes_Alias o
-        @st.fetch(o.anchor) { raise BadAlias, "Unknown alias: #{o.anchor}" }
+        @st.fetch(o.anchor) { raise AnchorNotDefined, o.anchor }
       end
 
       private
@@ -427,7 +428,7 @@ module Psych
 
     class NoAliasRuby < ToRuby
       def visit_Psych_Nodes_Alias o
-        raise BadAlias, "Unknown alias: #{o.anchor}"
+        raise AliasesNotEnabled
       end
     end
   end

@@ -27,10 +27,6 @@
 
 #elif defined(__cplusplus)
 # /* bool is a keyword in C++. */
-# if defined(HAVE_STDBOOL_H) && (__cplusplus >= 201103L)
-#  include <cstdbool>
-# endif
-#
 # ifndef __bool_true_false_are_defined
 #  define __bool_true_false_are_defined
 # endif
@@ -39,7 +35,7 @@
 # /* Take stdbool.h definition. */
 # include <stdbool.h>
 
-#else
+#elif !defined(HAVE__BOOL)
 typedef unsigned char _Bool;
 # /* See also http://www.open-std.org/jtc1/sc22/wg14/www/docs/n2229.htm */
 # define bool  _Bool

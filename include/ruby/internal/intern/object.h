@@ -92,8 +92,8 @@ VALUE rb_class_new_instance_kw(int argc, const VALUE *argv, VALUE klass, int kw_
  *
  * @param[in]  lhs          Comparison left hand side.
  * @param[in]  rhs          Comparison right hand side.
- * @retval     RUBY_Qtrue   They are equal.
- * @retval     RUBY_Qfalse  Otherwise.
+ * @retval     non-zero     They are equal.
+ * @retval     0            Otherwise.
  * @note       This  function  actually  calls `lhs.eql?(rhs)`  so  you  cannot
  *             implement your class' `#eql?` method using it.
  */
@@ -151,13 +151,12 @@ VALUE rb_obj_is_kind_of(VALUE obj, VALUE klass);
  * @return     An allocated, not yet initialised instance of `klass`.
  * @note       It calls  the allocator defined by  rb_define_alloc_func().  You
  *             cannot  use   this  function   to  define  an   allocator.   Use
- *             rb_newobj_of(), #TypedData_Make_Struct or others, instead.
+ *             TypedData_Make_Struct or others, instead.
  * @note       Usually  prefer  rb_class_new_instance() to  rb_obj_alloc()  and
  *             rb_obj_call_init().
  * @see        rb_class_new_instance()
  * @see        rb_obj_call_init()
  * @see        rb_define_alloc_func()
- * @see        rb_newobj_of()
  * @see        #TypedData_Make_Struct
  */
 VALUE rb_obj_alloc(VALUE klass);

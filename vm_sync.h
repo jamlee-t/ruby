@@ -4,7 +4,7 @@
 #include "vm_debug.h"
 #include "debug_counter.h"
 
-#if defined(USE_RUBY_DEBUG_LOG) && USE_RUBY_DEBUG_LOG
+#if USE_RUBY_DEBUG_LOG
 #define LOCATION_ARGS const char *file, int line
 #define LOCATION_PARAMS file, line
 #define APPEND_LOCATION_ARGS , const char *file, int line
@@ -21,9 +21,9 @@ void rb_vm_lock_body(LOCATION_ARGS);
 void rb_vm_unlock_body(LOCATION_ARGS);
 
 struct rb_ractor_struct;
-void rb_vm_lock_enter_body_cr(struct rb_ractor_struct *cr, unsigned int *lev APPEND_LOCATION_ARGS);
-void rb_vm_lock_enter_body_nb(unsigned int *lev APPEND_LOCATION_ARGS);
-void rb_vm_lock_enter_body(unsigned int *lev APPEND_LOCATION_ARGS);
+NOINLINE(void rb_vm_lock_enter_body_cr(struct rb_ractor_struct *cr, unsigned int *lev APPEND_LOCATION_ARGS));
+NOINLINE(void rb_vm_lock_enter_body_nb(unsigned int *lev APPEND_LOCATION_ARGS));
+NOINLINE(void rb_vm_lock_enter_body(unsigned int *lev APPEND_LOCATION_ARGS));
 void rb_vm_lock_leave_body(unsigned int *lev APPEND_LOCATION_ARGS);
 void rb_vm_barrier(void);
 

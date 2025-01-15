@@ -80,7 +80,7 @@ class TestIOBuffer < Test::Unit::TestCase
   end
 
   def test_file_mapped_invalid
-    assert_raise NoMethodError do
+    assert_raise TypeError do
       IO::Buffer.map("foobar")
     end
   end
@@ -88,28 +88,37 @@ class TestIOBuffer < Test::Unit::TestCase
   def test_string_mapped
     string = "Hello World"
     buffer = IO::Buffer.for(string)
-    refute buffer.readonly?
-
-    # Cannot modify string as it's locked by the buffer:
-    assert_raise RuntimeError do
-      string[0] = "h"
-    end
-
-    buffer.set_value(:U8, 0, "h".ord)
-
-    # Buffer releases it's ownership of the string:
-    buffer.free
-
-    assert_equal "hello World", string
-    string[0] = "H"
-    assert_equal "Hello World", string
+    assert buffer.readonly?
   end
 
   def test_string_mapped_frozen
     string = "Hello World".freeze
     buffer = IO::Buffer.for(string)
-
     assert buffer.readonly?
+  end
+
+  def test_string_mapped_mutable
+    string = "Hello World"
+    IO::Buffer.for(string) do |buffer|
+      refute buffer.readonly?
+
+      buffer.set_value(:U8, 0, "h".ord)
+
+      # Buffer releases it's ownership of the string:
+      buffer.free
+
+      assert_equal "hello World", string
+    end
+  end
+
+  def test_string_mapped_buffer_locked
+    string = "Hello World"
+    IO::Buffer.for(string) do |buffer|
+      # Cannot modify string as it's locked by the buffer:
+      assert_raise RuntimeError do
+        string[0] = "h"
+      end
+    end
   end
 
   def test_non_string
@@ -117,6 +126,20 @@ class TestIOBuffer < Test::Unit::TestCase
 
     assert_raise TypeError do
       IO::Buffer.for(not_string)
+    end
+  end
+
+  def test_string
+    result = IO::Buffer.string(12) do |buffer|
+      buffer.set_string("Hello World!")
+    end
+
+    assert_equal "Hello World!", result
+  end
+
+  def test_string_negative
+    assert_raise ArgumentError do
+      IO::Buffer.string(-1)
     end
   end
 
@@ -136,6 +159,24 @@ class TestIOBuffer < Test::Unit::TestCase
     buffer.set_string(message)
     buffer.resize(2048)
     assert_equal message, buffer.get_string(0, message.bytesize)
+  end
+
+  def test_resize_zero_internal
+    buffer = IO::Buffer.new(1)
+
+    buffer.resize(0)
+    assert_equal 0, buffer.size
+
+    buffer.resize(1)
+    assert_equal 1, buffer.size
+  end
+
+  def test_resize_zero_external
+    buffer = IO::Buffer.for('1')
+
+    assert_raise IO::Buffer::AccessError do
+      buffer.resize(0)
+    end
   end
 
   def test_compare_same_size
@@ -158,6 +199,14 @@ class TestIOBuffer < Test::Unit::TestCase
     assert_positive buffer2 <=> buffer1
   end
 
+  def test_compare_zero_length
+    buffer1 = IO::Buffer.new(0)
+    buffer2 = IO::Buffer.new(1)
+
+    assert_negative buffer1 <=> buffer2
+    assert_positive buffer2 <=> buffer1
+  end
+
   def test_slice
     buffer = IO::Buffer.new(128)
     slice = buffer.slice(8, 32)
@@ -165,16 +214,63 @@ class TestIOBuffer < Test::Unit::TestCase
     assert_equal("Hello World", buffer.get_string(8, 11))
   end
 
-  def test_slice_bounds
+  def test_slice_arguments
+    buffer = IO::Buffer.for("Hello World")
+
+    slice = buffer.slice
+    assert_equal "Hello World", slice.get_string
+
+    slice = buffer.slice(2)
+    assert_equal("llo World", slice.get_string)
+  end
+
+  def test_slice_bounds_error
     buffer = IO::Buffer.new(128)
 
     assert_raise ArgumentError do
       buffer.slice(128, 10)
     end
 
-    # assert_raise RuntimeError do
-    #   pp buffer.slice(-10, 10)
-    # end
+    assert_raise ArgumentError do
+      buffer.slice(-10, 10)
+    end
+  end
+
+  def test_slice_readonly
+    hello = %w"Hello World".join(" ").freeze
+    buffer = IO::Buffer.for(hello)
+    slice = buffer.slice
+    assert_predicate slice, :readonly?
+    assert_raise IO::Buffer::AccessError do
+      # This breaks the literal in string pool and many other tests in this file.
+      slice.set_string("Adios", 0, 5)
+    end
+    assert_equal "Hello World", hello
+  end
+
+  def test_transfer
+    hello = %w"Hello World".join(" ")
+    buffer = IO::Buffer.for(hello)
+    transferred = buffer.transfer
+    assert_equal "Hello World", transferred.get_string
+    assert_predicate buffer, :null?
+    assert_raise IO::Buffer::AccessError do
+      transferred.set_string("Goodbye")
+    end
+    assert_equal "Hello World", hello
+  end
+
+  def test_transfer_in_block
+    hello = %w"Hello World".join(" ")
+    buffer = IO::Buffer.for(hello, &:transfer)
+    assert_equal "Hello World", buffer.get_string
+    buffer.set_string("Ciao!")
+    assert_equal "Ciao! World", hello
+    hello.freeze
+    assert_raise IO::Buffer::AccessError do
+      buffer.set_string("Hola")
+    end
+    assert_equal "Ciao! World", hello
   end
 
   def test_locked
@@ -205,6 +301,26 @@ class TestIOBuffer < Test::Unit::TestCase
 
     chunk = buffer.get_string(0, message.bytesize, Encoding::BINARY)
     assert_equal Encoding::BINARY, chunk.encoding
+
+    assert_raise_with_message(ArgumentError, /bigger than the buffer size/) do
+      buffer.get_string(0, 129)
+    end
+
+    assert_raise_with_message(ArgumentError, /bigger than the buffer size/) do
+      buffer.get_string(129)
+    end
+
+    assert_raise_with_message(ArgumentError, /Offset can't be negative/) do
+      buffer.get_string(-1)
+    end
+  end
+
+  def test_zero_length_get_string
+    buffer = IO::Buffer.new.slice(0, 0)
+    assert_equal "", buffer.get_string
+
+    buffer = IO::Buffer.new(0)
+    assert_equal "", buffer.get_string
   end
 
   # We check that values are correctly round tripped.
@@ -231,15 +347,76 @@ class TestIOBuffer < Test::Unit::TestCase
     :F64 => [-1.0, 0.0, 0.5, 1.0, 128.0],
   }
 
-  def test_get_set_primitives
+  def test_get_set_value
     buffer = IO::Buffer.new(128)
 
-    RANGES.each do |type, values|
+    RANGES.each do |data_type, values|
       values.each do |value|
-        buffer.set_value(type, 0, value)
-        assert_equal value, buffer.get_value(type, 0), "Converting #{value} as #{type}."
+        buffer.set_value(data_type, 0, value)
+        assert_equal value, buffer.get_value(data_type, 0), "Converting #{value} as #{data_type}."
       end
     end
+  end
+
+  def test_get_set_values
+    buffer = IO::Buffer.new(128)
+
+    RANGES.each do |data_type, values|
+      format = [data_type] * values.size
+
+      buffer.set_values(format, 0, values)
+      assert_equal values, buffer.get_values(format, 0), "Converting #{values} as #{format}."
+    end
+  end
+
+  def test_zero_length_get_set_values
+    buffer = IO::Buffer.new(0)
+
+    assert_equal [], buffer.get_values([], 0)
+    assert_equal 0, buffer.set_values([], 0, [])
+  end
+
+  def test_values
+    buffer = IO::Buffer.new(128)
+
+    RANGES.each do |data_type, values|
+      format = [data_type] * values.size
+
+      buffer.set_values(format, 0, values)
+      assert_equal values, buffer.values(data_type, 0, values.size), "Reading #{values} as #{format}."
+    end
+  end
+
+  def test_each
+    buffer = IO::Buffer.new(128)
+
+    RANGES.each do |data_type, values|
+      format = [data_type] * values.size
+      data_type_size = IO::Buffer.size_of(data_type)
+      values_with_offsets = values.map.with_index{|value, index| [index * data_type_size, value]}
+
+      buffer.set_values(format, 0, values)
+      assert_equal values_with_offsets, buffer.each(data_type, 0, values.size).to_a, "Reading #{values} as #{data_type}."
+    end
+  end
+
+  def test_zero_length_each
+    buffer = IO::Buffer.new(0)
+
+    assert_equal [], buffer.each(:U8).to_a
+  end
+
+  def test_each_byte
+    string = "The quick brown fox jumped over the lazy dog."
+    buffer = IO::Buffer.for(string)
+
+    assert_equal string.bytes, buffer.each_byte.to_a
+  end
+
+  def test_zero_length_each_byte
+    buffer = IO::Buffer.new(0)
+
+    assert_equal [], buffer.each_byte.to_a
   end
 
   def test_clear
@@ -273,17 +450,49 @@ class TestIOBuffer < Test::Unit::TestCase
     input.close
   end
 
-  def test_read
+  def hello_world_tempfile(repeats = 1)
     io = Tempfile.new
-    io.write("Hello World")
+    repeats.times do
+      io.write("Hello World")
+    end
     io.seek(0)
 
-    buffer = IO::Buffer.new(128)
-    buffer.read(io, 5)
-
-    assert_equal "Hello", buffer.get_string(0, 5)
+    yield io
   ensure
-    io.close!
+    io&.close!
+  end
+
+  def test_read
+    hello_world_tempfile do |io|
+      buffer = IO::Buffer.new(128)
+      buffer.read(io)
+      assert_equal "Hello", buffer.get_string(0, 5)
+    end
+  end
+
+  def test_read_with_with_length
+    hello_world_tempfile do |io|
+      buffer = IO::Buffer.new(128)
+      buffer.read(io, 5)
+      assert_equal "Hello", buffer.get_string(0, 5)
+    end
+  end
+
+  def test_read_with_with_offset
+    hello_world_tempfile do |io|
+      buffer = IO::Buffer.new(128)
+      buffer.read(io, nil, 6)
+      assert_equal "Hello", buffer.get_string(6, 5)
+    end
+  end
+
+  def test_read_with_length_and_offset
+    hello_world_tempfile(100) do |io|
+      buffer = IO::Buffer.new(1024)
+      # Only read 24 bytes from the file, as we are starting at offset 1000 in the buffer.
+      assert_equal 24, buffer.read(io, 0, 1000)
+      assert_equal "Hello World", buffer.get_string(1000, 11)
+    end
   end
 
   def test_write
@@ -291,10 +500,23 @@ class TestIOBuffer < Test::Unit::TestCase
 
     buffer = IO::Buffer.new(128)
     buffer.set_string("Hello")
-    buffer.write(io, 5)
+    buffer.write(io)
 
     io.seek(0)
     assert_equal "Hello", io.read(5)
+  ensure
+    io.close!
+  end
+
+  def test_write_with_length_and_offset
+    io = Tempfile.new
+
+    buffer = IO::Buffer.new(5)
+    buffer.set_string("Hello")
+    buffer.write(io, 4, 1)
+
+    io.seek(0)
+    assert_equal "ello", io.read(4)
   ensure
     io.close!
   end
@@ -305,9 +527,23 @@ class TestIOBuffer < Test::Unit::TestCase
     io.seek(0)
 
     buffer = IO::Buffer.new(128)
-    buffer.pread(io, 5, 6)
+    buffer.pread(io, 6, 5)
 
     assert_equal "World", buffer.get_string(0, 5)
+    assert_equal 0, io.tell
+  ensure
+    io.close!
+  end
+
+  def test_pread_offset
+    io = Tempfile.new
+    io.write("Hello World")
+    io.seek(0)
+
+    buffer = IO::Buffer.new(128)
+    buffer.pread(io, 6, 5, 6)
+
+    assert_equal "World", buffer.get_string(6, 5)
     assert_equal 0, io.tell
   ensure
     io.close!
@@ -318,7 +554,7 @@ class TestIOBuffer < Test::Unit::TestCase
 
     buffer = IO::Buffer.new(128)
     buffer.set_string("World")
-    buffer.pwrite(io, 5, 6)
+    buffer.pwrite(io, 6, 5)
 
     assert_equal 0, io.tell
 
@@ -326,5 +562,125 @@ class TestIOBuffer < Test::Unit::TestCase
     assert_equal "World", io.read(5)
   ensure
     io.close!
+  end
+
+  def test_pwrite_offset
+    io = Tempfile.new
+
+    buffer = IO::Buffer.new(128)
+    buffer.set_string("Hello World")
+    buffer.pwrite(io, 6, 5, 6)
+
+    assert_equal 0, io.tell
+
+    io.seek(6)
+    assert_equal "World", io.read(5)
+  ensure
+    io.close!
+  end
+
+  def test_operators
+    source = IO::Buffer.for("1234123412")
+    mask = IO::Buffer.for("133\x00")
+
+    assert_equal IO::Buffer.for("123\x00123\x0012"), (source & mask)
+    assert_equal IO::Buffer.for("1334133413"), (source | mask)
+    assert_equal IO::Buffer.for("\x00\x01\x004\x00\x01\x004\x00\x01"), (source ^ mask)
+    assert_equal IO::Buffer.for("\xce\xcd\xcc\xcb\xce\xcd\xcc\xcb\xce\xcd"), ~source
+  end
+
+  def test_inplace_operators
+    source = IO::Buffer.for("1234123412")
+    mask = IO::Buffer.for("133\x00")
+
+    assert_equal IO::Buffer.for("123\x00123\x0012"), source.dup.and!(mask)
+    assert_equal IO::Buffer.for("1334133413"), source.dup.or!(mask)
+    assert_equal IO::Buffer.for("\x00\x01\x004\x00\x01\x004\x00\x01"), source.dup.xor!(mask)
+    assert_equal IO::Buffer.for("\xce\xcd\xcc\xcb\xce\xcd\xcc\xcb\xce\xcd"), source.dup.not!
+  end
+
+  def test_shared
+    message = "Hello World"
+    buffer = IO::Buffer.new(64, IO::Buffer::MAPPED | IO::Buffer::SHARED)
+
+    pid = fork do
+      buffer.set_string(message)
+    end
+
+    Process.wait(pid)
+    string = buffer.get_string(0, message.bytesize)
+    assert_equal message, string
+  rescue NotImplementedError
+    omit "Fork/shared memory is not supported."
+  end
+
+  def test_private
+    Tempfile.create(%w"buffer .txt") do |file|
+      file.write("Hello World")
+
+      buffer = IO::Buffer.map(file, nil, 0, IO::Buffer::PRIVATE)
+      begin
+        assert buffer.private?
+        refute buffer.readonly?
+
+        buffer.set_string("J")
+
+        # It was not changed because the mapping was private:
+        file.seek(0)
+        assert_equal "Hello World", file.read
+      ensure
+        buffer&.free
+      end
+    end
+  end
+
+  def test_copy_overlapped_fwd
+    buf = IO::Buffer.for('0123456789').dup
+    buf.copy(buf, 3, 7)
+    assert_equal '0120123456', buf.get_string
+  end
+
+  def test_copy_overlapped_bwd
+    buf = IO::Buffer.for('0123456789').dup
+    buf.copy(buf, 0, 7, 3)
+    assert_equal '3456789789', buf.get_string
+  end
+
+  def test_copy_null_destination
+    buf = IO::Buffer.new(0)
+    assert_predicate buf, :null?
+    buf.copy(IO::Buffer.for('a'), 0, 0)
+    assert_predicate buf, :empty?
+  end
+
+  def test_copy_null_source
+    buf = IO::Buffer.for('a').dup
+    src = IO::Buffer.new(0)
+    assert_predicate src, :null?
+    buf.copy(src, 0, 0)
+    assert_equal 'a', buf.get_string
+  end
+
+  def test_set_string_overlapped_fwd
+    str = +'0123456789'
+    IO::Buffer.for(str) do |buf|
+      buf.set_string(str, 3, 7)
+    end
+    assert_equal '0120123456', str
+  end
+
+  def test_set_string_overlapped_bwd
+    str = +'0123456789'
+    IO::Buffer.for(str) do |buf|
+      buf.set_string(str, 0, 7, 3)
+    end
+    assert_equal '3456789789', str
+  end
+
+  def test_set_string_null_destination
+    buf = IO::Buffer.new(0)
+    assert_predicate buf, :null?
+    buf.set_string('a', 0, 0)
+    assert_predicate buf, :empty?
   end
 end
